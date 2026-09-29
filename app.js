@@ -16,8 +16,8 @@ const MODULES = {
     hint: 'Wegpunkte, Treffpunkte, Wasserstellen. GPS funktioniert auch ohne Internet.',
     fields: [
       { key: 'name', label: 'Bezeichnung', type: 'text', required: true },
-      { key: 'lat', label: 'Breite (Lat)', type: 'number', step: 'any' },
-      { key: 'lon', label: 'Länge (Lon)', type: 'number', step: 'any' },
+      { key: 'lat', label: 'Breite (Lat)', type: 'number', step: 'any', min: -90, max: 90 },
+      { key: 'lon', label: 'Länge (Lon)', type: 'number', step: 'any', min: -180, max: 180 },
       { key: 'note', label: 'Notiz', type: 'textarea', full: true },
     ],
     gps: true,
@@ -112,17 +112,77 @@ function expiryStatus(date) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, { error = false } = {}) {
   let t = $('.toast');
-  if (!t) t = document.body.appendChild(el('div', { class: 'toast', role: 'status' }));
+  if (!t) t = document.body.appendChild(el('div', { class: 'toast' }));
+  t.setAttribute('role', error ? 'alert' : 'status');
+  t.classList.toggle('error', error);
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 2500);
+  toastTimer = setTimeout(() => (t.hidden = true), error ? 8000 : 2500);
+}
+
+/* Fehler IMMER sichtbar machen – nie still verschlucken */
+function describeError(err) {
+  if (err?.name === 'QuotaExceededError') return 'Speicher voll – bitte Backup exportieren und Einträge löschen.';
+  return err?.message || String(err);
+}
+function showError(context, err) {
+  console.error(`[${context}]`, err);
+  toast(`⚠ ${context}: ${describeError(err)}`, { error: true });
+}
+
+/* ---------------- Datensatz-Schema ----------------
+   Jeder Datensatz trägt "schemaVersion". Ändert sich das
+   Format später, SCHEMA_VERSION erhöhen und in migrateEntry()
+   einen Schritt ergänzen – alte Daten bleiben so lesbar.    */
+const SCHEMA_VERSION = 1;
+
+function migrateEntry(entry) {
+  const e = { ...entry };
+  if (!e.schemaVersion) e.schemaVersion = 1; // v0 (ohne Feld) → v1: nur Feld ergänzt
+  // if (e.schemaVersion === 1) { …Umbau… ; e.schemaVersion = 2; }
+  return e;
+}
+
+const META_KEYS = new Set(['id', 'module', 'created', 'schemaVersion']);
+const MAX_TEXT = 10000;
+
+function checkValue(field, value) {
+  switch (field.type) {
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value) &&
+        (field.min == null || value >= field.min) && (field.max == null || value <= field.max);
+    case 'date':
+      return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !isNaN(new Date(value));
+    case 'select':
+      return field.options.includes(value);
+    default:
+      return typeof value === 'string' && value.length <= MAX_TEXT;
+  }
+}
+
+/* Gibt eine Fehlerbeschreibung zurück oder null, wenn der Eintrag gültig ist */
+function validateEntry(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return 'kein gültiger Datensatz';
+  const mod = MODULES[e.module];
+  if (!mod) return `unbekanntes Modul „${e.module}"`;
+  if (typeof e.name !== 'string' || !e.name.trim()) return 'Bezeichnung fehlt';
+  if (e.schemaVersion != null && (!Number.isInteger(e.schemaVersion) || e.schemaVersion < 0)) return 'ungültige schemaVersion';
+  if (e.schemaVersion > SCHEMA_VERSION) return 'stammt aus einer neueren App-Version';
+  if (e.created != null && !Number.isFinite(e.created)) return 'ungültiger Zeitstempel';
+  for (const [key, value] of Object.entries(e)) {
+    if (META_KEYS.has(key)) continue;
+    const field = mod.fields.find((f) => f.key === key);
+    if (!field) return `unbekanntes Feld „${key}"`;
+    if (!checkValue(field, value)) return `ungültiger Wert im Feld „${field.label}"`;
+  }
+  return null;
 }
 
 /* ---------------- Datenbank ----------------
-   Einheitliche API: all(), add(), remove(), clear().
+   Einheitliche API: all(), add(), remove(), putAll(), replaceAll().
    IndexedDB bevorzugt; localStorage als Fallback
    (z. B. privater Modus in älteren Browsern).       */
 const DB_NAME = 'offgrid-hub';
@@ -140,20 +200,36 @@ function openIndexedDB() {
         store.createIndex('module', 'module', { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Andere Instanz (z. B. neue App-Version im zweiten Tab) will upgraden
+      db.onversionchange = () => {
+        db.close();
+        toast('Datenbank wurde in einem anderen Tab aktualisiert – bitte neu laden.', { error: true });
+      };
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
     req.onblocked = () => reject(new Error('Datenbank blockiert'));
   });
 }
 
 function idbStore(db) {
+  // Alle Operationen einer Funktion laufen in EINER Transaktion:
+  // entweder alles wird geschrieben oder nichts (Rollback).
   const run = (mode, fn) =>
     new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, mode);
-      const result = fn(tx.objectStore(STORE));
+      let result;
+      try {
+        result = fn(tx.objectStore(STORE));
+      } catch (err) {
+        tx.abort(); // sonst würden bereits angestoßene Schritte (z. B. clear) trotzdem gespeichert
+        return reject(err);
+      }
       tx.oncomplete = () => resolve(result && 'result' in result ? result.result : undefined);
       tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('Schreibvorgang abgebrochen'));
     });
 
   return {
@@ -161,16 +237,25 @@ function idbStore(db) {
     all: (module) => run('readonly', (s) => (module ? s.index('module').getAll(module) : s.getAll())),
     add: (entry) => run('readwrite', (s) => s.add(entry)),
     remove: (id) => run('readwrite', (s) => s.delete(id)),
-    clear: () => run('readwrite', (s) => s.clear()),
+    putAll: (entries) => run('readwrite', (s) => entries.forEach((e) => s.put(e))),
+    replaceAll: (entries) => run('readwrite', (s) => {
+      s.clear();
+      entries.forEach((e) => s.add(e));
+    }),
   };
 }
 
 function localStore() {
   const KEY = `${DB_NAME}:${STORE}`;
   const read = () => {
-    try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; }
+    const raw = localStorage.getItem(KEY);
+    if (raw == null) return [];
+    const rows = JSON.parse(raw); // Kaputte Daten → Fehler statt stillem Überschreiben mit []
+    if (!Array.isArray(rows)) throw new Error('Gespeicherte Daten sind beschädigt');
+    return rows;
   };
   const write = (rows) => localStorage.setItem(KEY, JSON.stringify(rows));
+  const withIds = (rows, start) => rows.map((e, i) => ({ ...e, id: e.id ?? start + i }));
 
   return {
     kind: 'localStorage',
@@ -183,7 +268,13 @@ function localStore() {
       return id;
     },
     remove: async (id) => write(read().filter((e) => e.id !== id)),
-    clear: async () => write([]),
+    putAll: async (entries) => {
+      const byId = new Map(read().map((e) => [e.id, e]));
+      entries.forEach((e) => byId.set(e.id, e));
+      write([...byId.values()]);
+    },
+    // Ein einziger setItem-Aufruf → schlägt er fehl, bleibt der alte Stand erhalten
+    replaceAll: async (entries) => write(withIds(entries, 1)),
   };
 }
 
@@ -196,9 +287,56 @@ async function initDB() {
   }
 }
 
+/* Bestehende Datensätze ohne/mit alter schemaVersion hochstufen */
+async function migrateStoredEntries() {
+  const outdated = (await db.all()).filter((e) => e.schemaVersion !== SCHEMA_VERSION);
+  if (outdated.length) await db.putAll(outdated.map(migrateEntry));
+}
+
 /* ---------------- State ---------------- */
 let db;
 let currentModule = null;
+let persistState = 'wird geprüft …';
+let waitingWorker = null;
+
+/* ---------------- Backup-Zeitpunkt ---------------- */
+const BACKUP_KEY = 'offgrid:lastBackup';
+const BACKUP_MAX_AGE_DAYS = 7;
+
+function getLastBackup() {
+  try {
+    const ts = Number(localStorage.getItem(BACKUP_KEY));
+    return ts > 0 ? ts : null;
+  } catch {
+    return null;
+  }
+}
+
+function setLastBackup(ts) {
+  try {
+    localStorage.setItem(BACKUP_KEY, String(ts));
+  } catch (err) {
+    showError('Backup-Zeitpunkt nicht gespeichert', err);
+  }
+}
+
+function daysSince(ts) {
+  return Math.floor((Date.now() - ts) / 86400000);
+}
+
+function renderBackupWarning(entryCount) {
+  const last = getLastBackup();
+  const banner = $('#backup-banner');
+  // Ohne Daten gibt es nichts zu sichern
+  if (!entryCount || (last && daysSince(last) < BACKUP_MAX_AGE_DAYS)) {
+    banner.hidden = true;
+    return;
+  }
+  $('#backup-banner-text').textContent = last
+    ? `⚠ Letztes Backup vor ${daysSince(last)} Tagen.`
+    : '⚠ Noch kein Backup erstellt.';
+  banner.hidden = false;
+}
 
 /* ---------------- Dashboard ---------------- */
 async function renderDashboard() {
@@ -218,6 +356,7 @@ async function renderDashboard() {
       );
     })
   );
+  renderBackupWarning(all.length);
   updateSystemInfo();
 }
 
@@ -226,13 +365,14 @@ function buildField(f) {
   const id = `f-${f.key}`;
   let input;
   if (f.type === 'textarea') {
-    input = el('textarea', { id, name: f.key });
+    input = el('textarea', { id, name: f.key, maxlength: MAX_TEXT });
   } else if (f.type === 'select') {
     input = el('select', { id, name: f.key }, f.options.map((o) => el('option', { value: o }, o)));
   } else {
     input = el('input', {
       id, name: f.key, type: f.type,
       step: f.step, min: f.min, max: f.max,
+      maxlength: f.type === 'text' ? MAX_TEXT : null,
       required: f.required,
       inputmode: f.type === 'number' ? 'decimal' : null,
     });
@@ -253,7 +393,7 @@ function renderForm(mod) {
 
 async function renderList() {
   const mod = MODULES[currentModule];
-  const rows = (await db.all(currentModule)).sort((a, b) => b.created - a.created);
+  const rows = (await db.all(currentModule)).sort((a, b) => (b.created || 0) - (a.created || 0));
   const list = $('#entry-list');
 
   if (!rows.length) {
@@ -286,28 +426,43 @@ async function renderList() {
 
 async function onSubmit(ev) {
   ev.preventDefault();
+  const form = ev.target;
   const mod = MODULES[currentModule];
-  const data = new FormData(ev.target);
-  const entry = { module: currentModule, created: Date.now() };
+  const data = new FormData(form);
+  const entry = { module: currentModule, created: Date.now(), schemaVersion: SCHEMA_VERSION };
   for (const f of mod.fields) {
     const v = String(data.get(f.key) ?? '').trim();
     if (v === '') continue;
     entry[f.key] = f.type === 'number' ? Number(v) : v;
   }
-  await db.add(entry);
-  ev.target.reset();
+
+  const problem = validateEntry(entry);
+  if (problem) return toast(`⚠ Nicht gespeichert: ${problem}`, { error: true });
+
+  try {
+    await db.add(entry);
+  } catch (err) {
+    // Formular NICHT leeren, damit die Eingabe nicht verloren geht
+    return showError('Speichern fehlgeschlagen', err);
+  }
+  form.reset();
   toast('Gespeichert');
-  renderList();
+  renderList().catch((err) => showError('Liste laden', err));
 }
 
 async function deleteEntry(entry) {
   if (!confirm(`„${entry.name}" löschen?`)) return;
-  await db.remove(entry.id);
-  renderList();
+  try {
+    await db.remove(entry.id);
+  } catch (err) {
+    return showError('Löschen fehlgeschlagen', err);
+  }
+  toast('Gelöscht');
+  renderList().catch((err) => showError('Liste laden', err));
 }
 
 function fillGPS() {
-  if (!('geolocation' in navigator)) return toast('GPS nicht verfügbar');
+  if (!('geolocation' in navigator)) return toast('GPS nicht verfügbar', { error: true });
   toast('Suche GPS-Signal …');
   navigator.geolocation.getCurrentPosition(
     ({ coords }) => {
@@ -315,7 +470,7 @@ function fillGPS() {
       $('#f-lon').value = coords.longitude.toFixed(6);
       toast(`Position ±${Math.round(coords.accuracy)} m`);
     },
-    (err) => toast(`GPS-Fehler: ${err.message}`),
+    (err) => toast(`GPS-Fehler: ${err.message}`, { error: true }),
     { enableHighAccuracy: true, timeout: 30000, maximumAge: 60000 }
   );
 }
@@ -339,38 +494,175 @@ function route() {
     $('#view-title').textContent = `${mod.icon} ${mod.name}`;
     $('#module-hint').textContent = mod.hint;
     renderForm(mod);
-    renderList();
+    renderList().catch((err) => showError('Liste laden', err));
   } else {
     currentModule = null;
     $('#view-title').textContent = 'OFF-GRID HUB';
-    renderDashboard();
+    renderDashboard().catch((err) => showError('Dashboard laden', err));
   }
 }
 
 /* ---------------- Backup (Export / Import) ---------------- */
+const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
+
 async function exportData() {
-  const payload = { app: DB_NAME, version: DB_VERSION, exported: new Date().toISOString(), entries: await db.all() };
+  let entries;
+  try {
+    entries = await db.all();
+  } catch (err) {
+    return showError('Export fehlgeschlagen', err);
+  }
+  const now = new Date();
+  const payload = { app: DB_NAME, schemaVersion: SCHEMA_VERSION, exported: now.toISOString(), entries };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const a = el('a', { href: URL.createObjectURL(blob), download: `offgrid-backup-${new Date().toISOString().slice(0, 10)}.json` });
+  const a = el('a', { href: URL.createObjectURL(blob), download: `offgrid-backup-${now.toISOString().slice(0, 10)}.json` });
   document.body.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+
+  setLastBackup(now.getTime());
+  toast(`Backup mit ${entries.length} Einträgen erstellt`);
+  if (!currentModule) renderDashboard().catch((err) => showError('Dashboard laden', err));
+}
+
+/* Prüft eine Backup-Datei vollständig, BEVOR irgendetwas gespeichert wird.
+   Wirft einen Fehler mit verständlicher Beschreibung. */
+function parseBackup(text) {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error('Datei ist kein gültiges JSON (beschädigt?)');
+  }
+  if (!payload || typeof payload !== 'object' || payload.app !== DB_NAME) {
+    throw new Error('Datei ist kein Backup dieser App');
+  }
+  if (!Array.isArray(payload.entries)) throw new Error('Backup enthält keine Einträge-Liste');
+  if (payload.schemaVersion > SCHEMA_VERSION) {
+    throw new Error('Backup stammt aus einer neueren App-Version – bitte App aktualisieren');
+  }
+  const problems = [];
+  payload.entries.forEach((e, i) => {
+    const p = validateEntry(e);
+    if (p) problems.push(`Eintrag ${i + 1}: ${p}`);
+  });
+  if (problems.length) {
+    throw new Error(`${problems.length} fehlerhafte Einträge (${problems.slice(0, 2).join('; ')}${problems.length > 2 ? '; …' : ''})`);
+  }
+  const exported = Date.parse(payload.exported);
+  // IDs werden neu vergeben
+  return {
+    entries: payload.entries.map(({ id, ...rest }) => migrateEntry(rest)),
+    exported: Number.isFinite(exported) ? exported : null,
+  };
 }
 
 async function importData(file) {
+  let backup;
   try {
-    const payload = JSON.parse(await file.text());
-    const entries = Array.isArray(payload.entries) ? payload.entries.filter((e) => e && MODULES[e.module] && e.name) : null;
-    if (!entries) throw new Error('Ungültiges Backup-Format');
-    if (!confirm(`${entries.length} Einträge importieren? Bestehende Daten werden ersetzt.`)) return;
-    await db.clear();
-    for (const { id, ...rest } of entries) await db.add(rest);
-    toast(`${entries.length} Einträge importiert`);
-    renderDashboard();
+    if (file.size > MAX_IMPORT_BYTES) throw new Error('Datei ist zu groß');
+    backup = parseBackup(await file.text());
   } catch (err) {
-    toast(`Import fehlgeschlagen: ${err.message}`);
+    // Vorhandene Daten wurden nicht angefasst
+    return showError('Import abgelehnt – vorhandene Daten unverändert', err);
   }
+
+  if (!confirm(`${backup.entries.length} Einträge importieren? Bestehende Daten werden ersetzt.`)) return;
+
+  try {
+    await db.replaceAll(backup.entries); // eine Transaktion: alles oder nichts
+    const count = (await db.all()).length;
+    if (count !== backup.entries.length) {
+      throw new Error(`nach dem Import ${count} statt ${backup.entries.length} Einträge vorhanden`);
+    }
+  } catch (err) {
+    return showError('Import fehlgeschlagen', err);
+  }
+
+  // Die Daten entsprechen jetzt genau dieser Backup-Datei
+  if (backup.exported) setLastBackup(backup.exported);
+  toast(`${backup.entries.length} Einträge importiert`);
+  navigate(null);
+  route();
+}
+
+/* ---------------- Speicher dauerhaft? ----------------
+   Nur "gewährt" schützt davor, dass der Browser die Daten bei
+   Speichermangel automatisch löscht.                       */
+async function checkPersistence() {
+  if (!navigator.storage?.persisted) return 'nicht unterstützt';
+  try {
+    let granted = await navigator.storage.persisted();
+    if (!granted && navigator.storage.persist) granted = await navigator.storage.persist();
+    return granted ? 'gewährt' : 'nicht gewährt';
+  } catch (err) {
+    console.warn('[Storage] persist:', err);
+    return 'unbekannt (Fehler)';
+  }
+}
+
+/* ---------------- Service Worker / Updates ---------------- */
+function askWorker(worker, message) {
+  return new Promise((resolve) => {
+    if (!worker) return resolve(null);
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 1500);
+    channel.port1.onmessage = (e) => {
+      clearTimeout(timer);
+      resolve(e.data);
+    };
+    worker.postMessage(message, [channel.port2]);
+  });
+}
+
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const hadController = !!navigator.serviceWorker.controller;
+
+  let reg;
+  try {
+    reg = await navigator.serviceWorker.register('service-worker.js');
+  } catch (err) {
+    return showError('Offline-Cache nicht aktiv', err);
+  }
+
+  const offerUpdate = (worker) => {
+    waitingWorker = worker;
+    $('#update-banner').hidden = false;
+    updateSystemInfo();
+  };
+
+  // Update wurde schon bei einem früheren Besuch geladen
+  if (reg.waiting && hadController) offerUpdate(reg.waiting);
+
+  reg.addEventListener('updatefound', () => {
+    const worker = reg.installing;
+    worker?.addEventListener('statechange', () => {
+      // "installed" + bestehender Controller = neue Version wartet
+      if (worker.state === 'installed' && navigator.serviceWorker.controller) offerUpdate(worker);
+    });
+  });
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // Erstinstallation: nur Status aktualisieren. Update: Seite neu laden,
+    // damit HTML, CSS und JS garantiert aus derselben Version stammen.
+    if (!hadController) return updateSystemInfo();
+    if (reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
+  // Beim Zurückkehren in die App nach Updates suchen
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && navigator.onLine) reg.update().catch(() => {});
+  });
+}
+
+function applyUpdate() {
+  if (waitingWorker) waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+  else location.reload();
 }
 
 /* ---------------- System-Status ---------------- */
@@ -380,51 +672,91 @@ function updateNetStatus() {
   s.classList.toggle('online', navigator.onLine);
 }
 
-async function updateSystemInfo() {
-  $('#sys-db').textContent = db.kind;
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
 
-  if (navigator.storage?.estimate) {
-    const { usage = 0, quota = 0 } = await navigator.storage.estimate();
-    const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
-    $('#sys-storage').textContent =
-      `${(usage / 1048576).toFixed(2)} MB / ${(quota / 1048576).toFixed(0)} MB${persisted ? ' · dauerhaft' : ''}`;
-  }
+async function updateSystemInfo() {
+  const set = (sel, text, warn = false) => {
+    const node = $(sel);
+    node.textContent = text;
+    node.classList.toggle('warn-text', warn);
+  };
+
+  set('#sys-db', db.kind === 'IndexedDB' ? 'IndexedDB' : 'localStorage (Notlösung, max. ~5 MB)', db.kind !== 'IndexedDB');
+  set('#sys-persist', persistState, persistState !== 'gewährt');
+  set('#sys-mode', isStandalone() ? 'Homescreen-App' : 'Browser-Tab');
+
+  const last = getLastBackup();
+  set('#sys-backup', last ? `${new Date(last).toLocaleString('de-DE')} (vor ${daysSince(last)} T.)` : 'noch nie', !last || daysSince(last) >= BACKUP_MAX_AGE_DAYS);
+
+  try {
+    if (navigator.storage?.estimate) {
+      const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+      set('#sys-storage', `${(usage / 1048576).toFixed(2)} MB / ${(quota / 1048576).toFixed(0)} MB`);
+    }
+  } catch { /* nur Anzeige */ }
 
   if ('serviceWorker' in navigator) {
-    $('#sys-sw').textContent = navigator.serviceWorker.controller ? 'aktiv' : 'wird installiert …';
+    const controller = navigator.serviceWorker.controller;
+    set('#sys-sw', controller ? 'aktiv' : 'wird installiert …', !controller);
+    const current = await askWorker(controller, { type: 'GET_VERSION' });
+    const waiting = waitingWorker && (await askWorker(waitingWorker, { type: 'GET_VERSION' }));
+    set('#sys-version', `${current?.version ?? '–'}${waiting?.version ? ` (Update ${waiting.version} bereit)` : ''}`);
   } else {
-    $('#sys-sw').textContent = 'nicht unterstützt';
+    set('#sys-sw', 'nicht unterstützt', true);
   }
 
-  if (navigator.getBattery) {
-    const b = await navigator.getBattery();
-    $('#sys-battery').textContent = `${Math.round(b.level * 100)} %${b.charging ? ' ⚡' : ''}`;
-  } else {
-    $('#sys-battery').textContent = 'n/a';
-  }
+  try {
+    if (navigator.getBattery) {
+      const b = await navigator.getBattery();
+      set('#sys-battery', `${Math.round(b.level * 100)} %${b.charging ? ' ⚡' : ''}`);
+    } else {
+      set('#sys-battery', 'n/a');
+    }
+  } catch { /* nur Anzeige */ }
 }
 
 /* ---------------- Nachtsicht ---------------- */
 function applyNightMode(on) {
   if (on) document.documentElement.setAttribute('data-mode', 'night');
   else document.documentElement.removeAttribute('data-mode');
-  try { localStorage.setItem('offgrid:night', on ? '1' : '0'); } catch { /* ignore */ }
+  try { localStorage.setItem('offgrid:night', on ? '1' : '0'); } catch { /* nur Komfort */ }
+}
+
+/* ---------------- Viewport-Höhe ----------------
+   Moderne Browser nutzen 100dvh (CSS). Nur ältere Browser ohne
+   dvh bekommen die echte sichtbare Höhe per JS.            */
+function fixViewportHeight() {
+  if (window.CSS?.supports?.('height', '100dvh')) return;
+  const setHeight = () => document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+  setHeight();
+  window.addEventListener('resize', setHeight);
 }
 
 /* ---------------- Start ---------------- */
 async function init() {
-  try { applyNightMode(localStorage.getItem('offgrid:night') === '1'); } catch { /* ignore */ }
+  fixViewportHeight();
+  try { applyNightMode(localStorage.getItem('offgrid:night') === '1'); } catch { /* nur Komfort */ }
+
+  // Unerwartete Fehler sichtbar machen
+  window.addEventListener('unhandledrejection', (e) => showError('Unerwarteter Fehler', e.reason));
+  window.addEventListener('error', (e) => showError('Unerwarteter Fehler', e.error || e.message));
 
   db = await initDB();
-
-  // Browser bitten, Daten nicht automatisch zu löschen
-  if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
+  try {
+    await migrateStoredEntries();
+  } catch (err) {
+    showError('Datenmigration fehlgeschlagen', err);
+  }
 
   $('#btn-home').addEventListener('click', () => navigate(null));
   $('#btn-night').addEventListener('click', () =>
     applyNightMode(document.documentElement.getAttribute('data-mode') !== 'night'));
   $('#entry-form').addEventListener('submit', onSubmit);
   $('#btn-export').addEventListener('click', exportData);
+  $('#btn-backup-now').addEventListener('click', exportData);
+  $('#btn-update').addEventListener('click', applyUpdate);
   $('#file-import').addEventListener('change', (e) => {
     if (e.target.files[0]) importData(e.target.files[0]);
     e.target.value = '';
@@ -437,14 +769,10 @@ async function init() {
   updateNetStatus();
   route();
 
-  if ('serviceWorker' in navigator) {
-    try {
-      await navigator.serviceWorker.register('service-worker.js');
-      navigator.serviceWorker.addEventListener('controllerchange', updateSystemInfo);
-    } catch (err) {
-      console.warn('[SW] Registrierung fehlgeschlagen:', err);
-    }
-  }
+  persistState = await checkPersistence();
+  updateSystemInfo();
+
+  registerServiceWorker();
 }
 
 document.addEventListener('DOMContentLoaded', init);

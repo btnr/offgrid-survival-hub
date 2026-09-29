@@ -17,6 +17,11 @@
   --red: #e53935;          /* Kritisch */
   --radius: 6px;
   --gap: 12px;
+  /* Abstände inkl. Notch / Home-Indicator (iOS), 0 auf anderen Geräten */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
   --font: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   color-scheme: dark;
 }
@@ -46,9 +51,19 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Kein 100vh: auf iOS/Android ist das höher als der sichtbare Bereich,
+   sobald die Adressleiste eingeblendet ist. --app-height wird nur in
+   alten Browsern ohne dvh-Unterstützung per JS gesetzt (app.js). */
 body {
-  min-height: 100dvh;
-  padding-bottom: env(safe-area-inset-bottom);
+  min-height: var(--app-height, 100dvh);
+  padding-bottom: var(--safe-bottom);
+}
+
+/* Mind. 16px in allen Eingabefeldern → iOS zoomt beim Antippen nicht */
+input,
+select,
+textarea {
+  font-size: max(16px, 1rem);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -65,7 +80,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--gap);
-  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  padding: calc(10px + var(--safe-top)) calc(16px + var(--safe-right)) 10px calc(16px + var(--safe-left));
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
@@ -89,7 +104,28 @@ body {
 main {
   max-width: 960px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left));
+}
+
+/* ---------- Banner (Update / Backup-Warnung) ---------- */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--orange);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--orange);
+  font-weight: 700;
+}
+.banner.warn { margin-bottom: 16px; }
+.banner.info {
+  margin: 12px calc(16px + var(--safe-right)) 0 calc(16px + var(--safe-left));
+  border-color: var(--green);
+  color: var(--green);
 }
 
 .grid {
@@ -156,6 +192,7 @@ main {
 }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; }
+.kv dd.warn-text { color: var(--orange); }
 
 .row {
   display: flex;
@@ -232,7 +269,7 @@ main {
   border-radius: var(--radius);
   color: var(--text);
   font: inherit;
-  font-size: 16px;              /* verhindert Auto-Zoom auf iOS */
+  font-size: max(16px, 1rem);   /* verhindert Auto-Zoom auf iOS */
 }
 .field textarea { min-height: 80px; resize: vertical; }
 .field input:focus,
@@ -280,7 +317,7 @@ main {
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  bottom: calc(16px + var(--safe-bottom));
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
   padding: 10px 16px;
@@ -290,4 +327,8 @@ main {
   color: var(--green);
   font-size: 0.85rem;
   z-index: 20;
+}
+.toast.error {
+  border-color: var(--red);
+  color: var(--red);
 }

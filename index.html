@@ -6,12 +6,16 @@
   <meta name="description" content="Offline-fähiges, modulares Survival-Dashboard (Local-First PWA).">
   <meta name="theme-color" content="#000000">
   <meta name="color-scheme" content="dark">
+  <!-- Standalone-Start vom Homescreen (iOS + Android) -->
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="OffGrid">
   <title>Off-Grid Survival Hub</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icon.svg">
+  <!-- iOS kann kein SVG als Homescreen-Icon -->
+  <link rel="apple-touch-icon" href="icon-180.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -22,9 +26,21 @@
     <button class="icon-btn" id="btn-night" aria-label="Nachtsicht-Modus umschalten" title="Nachtsicht (Rotlicht)">&#9790;</button>
   </header>
 
+  <!-- Hinweis: neue App-Version liegt bereit -->
+  <div class="banner info" id="update-banner" role="alert" hidden>
+    <span>Neue Version verfügbar.</span>
+    <button class="btn primary" id="btn-update" type="button">Neu laden</button>
+  </div>
+
   <main id="app">
     <!-- Dashboard -->
     <section id="view-dashboard" class="view" aria-label="Dashboard">
+      <!-- Warnung: Backup fehlt oder ist veraltet -->
+      <div class="banner warn" id="backup-banner" role="alert" hidden>
+        <span id="backup-banner-text">Noch kein Backup erstellt.</span>
+        <button class="btn primary" id="btn-backup-now" type="button">Jetzt exportieren</button>
+      </div>
+
       <div class="grid" id="module-grid">
         <!-- Kacheln werden aus der Modul-Registry in app.js erzeugt -->
       </div>
@@ -33,15 +49,19 @@
         <h2>SYSTEM</h2>
         <dl class="kv">
           <dt>Speicher</dt><dd id="sys-storage">–</dd>
+          <dt>Dauerhaft</dt><dd id="sys-persist">–</dd>
           <dt>Datenbank</dt><dd id="sys-db">–</dd>
+          <dt>Letztes Backup</dt><dd id="sys-backup">–</dd>
+          <dt>Start-Modus</dt><dd id="sys-mode">–</dd>
           <dt>Offline-Cache</dt><dd id="sys-sw">–</dd>
+          <dt>App-Version</dt><dd id="sys-version">–</dd>
           <dt>Akku</dt><dd id="sys-battery">–</dd>
         </dl>
         <div class="row">
-          <button class="btn" id="btn-export">Backup exportieren</button>
+          <button class="btn" id="btn-export" type="button">Backup exportieren</button>
           <label class="btn">
             Backup importieren
-            <input type="file" id="file-import" accept="application/json" hidden>
+            <input type="file" id="file-import" accept="application/json,.json" hidden>
           </label>
         </div>
       </div>
