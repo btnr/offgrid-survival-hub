@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Offline-fähiges, modulares Survival-Dashboard (Local-First PWA).">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>Off-Grid Survival Hub</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="btn-home" aria-label="Zum Dashboard" hidden>&larr;</button>
+    <h1 class="title" id="view-title">OFF-GRID HUB</h1>
+    <span class="status" id="net-status" role="status" aria-live="polite">&#9679; OFFLINE</span>
+    <button class="icon-btn" id="btn-night" aria-label="Nachtsicht-Modus umschalten" title="Nachtsicht (Rotlicht)">&#9790;</button>
+  </header>
+
+  <main id="app">
+    <!-- Dashboard -->
+    <section id="view-dashboard" class="view" aria-label="Dashboard">
+      <div class="grid" id="module-grid">
+        <!-- Kacheln werden aus der Modul-Registry in app.js erzeugt -->
+      </div>
+
+      <div class="panel system">
+        <h2>SYSTEM</h2>
+        <dl class="kv">
+          <dt>Speicher</dt><dd id="sys-storage">–</dd>
+          <dt>Datenbank</dt><dd id="sys-db">–</dd>
+          <dt>Offline-Cache</dt><dd id="sys-sw">–</dd>
+          <dt>Akku</dt><dd id="sys-battery">–</dd>
+        </dl>
+        <div class="row">
+          <button class="btn" id="btn-export">Backup exportieren</button>
+          <label class="btn">
+            Backup importieren
+            <input type="file" id="file-import" accept="application/json" hidden>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- Generische Modul-Ansicht -->
+    <section id="view-module" class="view" aria-label="Modul" hidden>
+      <p class="hint" id="module-hint"></p>
+      <form id="entry-form" class="panel form" autocomplete="off"></form>
+      <ul id="entry-list" class="list"></ul>
+    </section>
+  </main>
+
+  <noscript>Diese App benötigt JavaScript.</noscript>
+  <script src="app.js" defer></script>
+</body>
+</html>

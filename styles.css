@@ -1,0 +1,293 @@
+/* ==========================================================
+   Survival Dark Mode
+   OLED-Schwarz spart Energie (schwarze Pixel = aus),
+   wenige Akzentfarben, keine Animationen, keine Webfonts.
+   ========================================================== */
+
+:root {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-2: #121212;
+  --border: #1f2a1f;
+  --text: #c8d0c8;
+  --muted: #6b7a6b;
+  --green: #4caf50;        /* taktisches Grün – Primär */
+  --green-dim: #1b3d1c;
+  --orange: #ff8c1a;       /* Warnung / Akzent */
+  --red: #e53935;          /* Kritisch */
+  --radius: 6px;
+  --gap: 12px;
+  --font: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+}
+
+/* Optional: Nachtsicht-Modus (nur Rot, schont Dunkeladaption) */
+:root[data-mode="night"] {
+  --text: #b33;
+  --muted: #611;
+  --green: #d32f2f;
+  --green-dim: #300;
+  --orange: #f44;
+  --border: #300;
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100dvh;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+[hidden] { display: none !important; }
+
+/* ---------- Topbar ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.15em;
+  color: var(--green);
+}
+
+.status {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  color: var(--orange);
+}
+.status.online { color: var(--green); }
+
+/* ---------- Layout ---------- */
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--gap);
+}
+
+@media (min-width: 640px) {
+  .grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ---------- Modul-Kacheln ---------- */
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 110px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tile:hover,
+.tile:focus-visible {
+  border-color: var(--green);
+  outline: none;
+}
+.tile-icon { font-size: 1.6rem; line-height: 1; }
+.tile-name {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--green);
+}
+.tile-meta { font-size: 0.8rem; color: var(--muted); }
+.tile-meta.warn { color: var(--orange); }
+
+/* ---------- Panels ---------- */
+.panel {
+  margin-top: 16px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+}
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* ---------- Buttons ---------- */
+.btn,
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;              /* Touch-Ziel */
+  padding: 0 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn:hover,
+.btn:focus-visible,
+.icon-btn:focus-visible {
+  border-color: var(--green);
+  outline: none;
+}
+.btn.primary {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: var(--green);
+}
+.btn.danger { color: var(--red); }
+
+.icon-btn {
+  min-width: 44px;
+  padding: 0;
+  font-size: 1.2rem;
+}
+
+/* ---------- Formular ---------- */
+.form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@media (min-width: 640px) {
+  .form { grid-template-columns: repeat(2, 1fr); }
+  .form .full { grid-column: 1 / -1; }
+}
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label {
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.field input,
+.field select,
+.field textarea {
+  min-height: 44px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;              /* verhindert Auto-Zoom auf iOS */
+}
+.field textarea { min-height: 80px; resize: vertical; }
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--green);
+  outline: none;
+}
+
+/* ---------- Eintragsliste ---------- */
+.list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: var(--radius);
+}
+.item.warn { border-left-color: var(--orange); }
+.item.crit { border-left-color: var(--red); }
+.item-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.item-title { font-weight: 700; }
+.item-meta { font-size: 0.8rem; color: var(--muted); }
+.item a { color: var(--green); }
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--green);
+  border-radius: var(--radius);
+  color: var(--green);
+  font-size: 0.85rem;
+  z-index: 20;
+}
